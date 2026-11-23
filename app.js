@@ -37,7 +37,13 @@
   }
   const getKey = () => kv('readonly', (s) => s.get(KEY_ID)).catch(() => null);
   const putKey = (k) => kv('readwrite', (s) => s.put(k, KEY_ID));
-  const dropKey = () => kv('readwrite', (s) => s.delete(KEY_ID)).catch(() => {});
+  // fail closed: if the stored key can't be deleted, wipe the whole database; if that fails too, block auto-unlock for this tab
+  let keyBlocked = false;
+  const dropKey = () => kv('readwrite', (s) => s.delete(KEY_ID)).catch(() => new Promise((res) => {
+    keyBlocked = true;
+    try { const r = indexedDB.deleteDatabase(DB); r.onsuccess = r.onerror = r.onblocked = () => res(); } catch { res(); }
+  }));
+  const dropDataCache = () => ('caches' in self ? caches.delete('data').catch(() => {}) : Promise.resolve());
 
   async function deriveKey(pass, env) {
     const base = await crypto.subtle.importKey('raw', enc.encode(pass), 'PBKDF2', false, ['deriveKey']);
@@ -53,7 +59,7 @@
     const r = await fetch(DATA_URL + '?t=' + Date.now(), { cache: 'no-store' });
     if (!r.ok) throw new Error('fetch ' + r.status);
     const env = await r.json();
-    if (env.v !== 1 || env.kdf !== 'PBKDF2-SHA256' || !(env.iter >= 310000)) throw new Error('bad format');
+    if (env.v !== 1 || env.kdf !== 'PBKDF2-SHA256' || !(Number.isInteger(env.iter) && env.iter >= 310000 && env.iter <= 5000000)) throw new Error('bad format');
     return env;
   }
 
@@ -180,18 +186,18 @@
     setTimeout(() => { hud.classList.replace('is-booting', 'is-booted'); }, 1600);
   }
 
-  async function lock() { sessionKey = null; await dropKey(); try { speechSynthesis.cancel(); } catch {} showLock(null); }
+  async function lock() { sessionKey = null; current = null; await dropKey(); try { speechSynthesis.cancel(); } catch {} showLock(null); }
 
   async function load(quiet) {
     let env;
     try { env = await fetchEnv(); } catch { if (!quiet) root.replaceChildren(h('div', { className: 'lock' }, h('div', {}, 'Could not load. Check the connection and reopen.'))); return; }
-    const key = sessionKey || await getKey();
+    const key = sessionKey || (keyBlocked ? null : await getKey());
     if (!key) return showLock(env);
     try {
       const data = await decrypt(key, env);
       sessionKey = key;
       if (!current || data.stamp !== current.stamp) render(data, env);
-    } catch { await dropKey(); sessionKey = null; showLock(env, 'The data was re-keyed. Enter the passphrase again.'); }
+    } catch { await dropKey(); await dropDataCache(); sessionKey = null; current = null; showLock(env, 'The data was re-keyed. Enter the passphrase again.'); }
   }
   function refresh() { current = null; load(); }
 
