@@ -98,9 +98,9 @@
       ? h('div', { className: 'proj-status waiting' }, h('b', {}, 'Waiting on: '), p.waiting_on || p.status || 'not stated')
       : h('div', { className: 'proj-status ' + state }, h('b', {}, state === 'done' ? 'Done: ' : 'Now: '), p.status || '');
     return h('article', { className: 'proj ' + state },
-      h('div', { className: 'proj-head' }, h('span', { className: 'proj-name' }, p.name), h('span', { className: 'chip ' + state }, STATES[state])),
-      h('div', { className: 'bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(v), 'aria-label': p.name + ' estimated progress' },
-        h('div', { className: 'fill ' + state, style: { width: v + '%' } })),
+      h('div', { className: 'proj-head' }, h('h3', { className: 'proj-name' }, p.name), h('span', { className: 'chip ' + state }, STATES[state])),
+      h('div', { className: 'bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(v), 'aria-valuetext': `about ${v}% (estimate)`, 'aria-label': p.name + ' estimated progress' },
+        h('div', { className: 'fill ' + state, 'aria-hidden': 'true', style: { width: v + '%' } })),
       h('div', { className: 'proj-meta' }, h('span', {}, `~${v}% est.`), h('span', {}, [p.owner, p.updated].filter(Boolean).join(' · '))),
       line,
       state === 'waiting' && p.status && p.waiting_on ? h('div', { className: 'proj-note' }, p.status) : null);
@@ -132,7 +132,12 @@
     const flagged = bots.filter((b) => b.status === 'paused' || b.status === 'blocked').length;
     const flagLine = () => flagged === 0 ? 'None are paused or blocked.' : `${flagged} ${flagged === 1 ? 'is' : 'are'} paused or blocked.`;
     const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
-    const projects = Array.isArray(data.projects) ? data.projects.filter((p) => p && p.name) : [];
+    // Review S1: only strings reach the cards (odd data in the file can't blank the app); at most 50, text capped
+    const str = (v, max = 300) => (typeof v === 'string' ? v.slice(0, max) : '');
+    const projects = Array.isArray(data.projects)
+      ? data.projects.filter((p) => p && typeof p === 'object' && typeof p.name === 'string' && p.name.trim()).slice(0, 50)
+          .map((p) => ({ name: str(p.name, 120), percent: p.percent, state: p.state, status: str(p.status), waiting_on: str(p.waiting_on), owner: str(p.owner, 60), updated: str(p.updated, 60) }))
+      : [];
     const projWaiting = () => projects.filter((p) => projState(p) === 'waiting');
     const projLine = () => {
       if (!projects.length) return '';
@@ -152,7 +157,7 @@
         speak(o.length ? `${n(o.length, 'item needs', 'items need')} you. ${o.map((d) => d.title).join('. Next: ')}. Approve and Later only change this screen.` : 'Nothing is marked waiting on you.');
       },
       projects() {
-        speak(projects.length ? projects.map((p) => `${p.name}, about ${pct(p.percent)} percent, ${projState(p) === 'waiting' ? 'waiting on ' + (p.waiting_on || p.status || 'something') : (p.status || STATES[projState(p)])}`).join('. ') + '.' : 'No projects listed yet.');
+        speak(projects.length ? projects.slice(0, 8).map((p) => `${p.name}, about ${pct(p.percent)} percent, ${projState(p) === 'waiting' ? 'waiting on ' + (p.waiting_on || p.status || 'something') : (p.status || STATES[projState(p)])}`).join('. ') + '.' + (projects.length > 8 ? ` And ${projects.length - 8} more.` : '') : 'No projects listed yet.');
       },
       focus() { st.focus = !st.focus; hud.classList.toggle('is-focus', st.focus); speak(st.focus ? 'Focus mode on. Panels dimmed, motion calmed.' : 'Focus mode off.'); draw(); },
     };
@@ -189,7 +194,7 @@
             transcript),
           h('section', { className: 'panel projects' },
             h('h2', {}, 'PROJECTS ', h('span', { className: 'count' }, projects.length ? `${projWaiting().length} waiting · ${projects.length}` : '0')),
-            projects.length ? projects.map(projectCard) : h('div', { className: 'empty' }, 'No projects listed yet.')),
+            projects.length ? projects.map((p) => projectCard(p)) : h('div', { className: 'empty' }, 'No projects listed yet.')),
           h('section', { className: 'panel right' },
             h('h2', {}, 'WAITING ON YOU ', h('span', { className: 'count' }, o.length)),
             o.length ? null : h('div', { className: 'empty' }, 'No open items.'),
