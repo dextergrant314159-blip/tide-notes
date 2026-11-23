@@ -306,3 +306,23 @@ body { -webkit-tap-highlight-color: transparent; overscroll-behavior-y: contain;
 .lock button { font-size: 15px; padding: 12px; border-radius: 8px; border: 0; background: #13d7ff; color: #04232c; font-weight: 700; }
 .lock .err { color: #ff9a9a; min-height: 1.2em; font-size: 13px; text-align: center; }
 @media (max-width: 980px) { .panel.right { order: 0; } .panel.left { order: 1; } }
+
+/* Projects (estimated progress + what it's doing or waiting on) */
+.panel.projects { grid-column: 1 / -1; grid-row: 2; }
+.is-booted .panel.projects { animation: slideIn 0.7s ease 0.2s forwards; }
+.proj { padding: 10px 0; border-top: 1px solid rgba(124,243,255,.10); }
+.proj:first-of-type { border-top: 0; }
+.proj-head { display: flex; align-items: center; gap: 8px; }
+.proj-name { font-weight: 600; color: #e8fbff; }
+.chip { margin-left: auto; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; border: 1px solid currentColor; }
+.chip.processing { color: #7cf3ff; } .chip.waiting { color: #ffc861; } .chip.done { color: #7dffb0; }
+.bar { height: 8px; margin: 8px 0 5px; border-radius: 999px; background: rgba(124,243,255,.10); overflow: hidden; }
+.fill { height: 100%; border-radius: 999px; transition: width .6s ease; }
+.fill.processing { background: linear-gradient(90deg, #13d7ff, #7cf3ff); box-shadow: 0 0 10px rgba(124,243,255,.5); }
+.fill.waiting { background: linear-gradient(90deg, #c98a1a, #ffc861); }
+.fill.done { background: linear-gradient(90deg, #1fbf6a, #7dffb0); }
+.proj-meta { display: flex; justify-content: space-between; gap: 8px; font-size: 11px; color: #9ad7e6; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.proj-status { margin-top: 5px; font-size: 13px; line-height: 1.4; color: #cfeff7; }
+.proj-status.waiting b { color: #ffc861; } .proj-status.processing b { color: #7cf3ff; } .proj-status.done b { color: #7dffb0; }
+.proj-note { margin-top: 3px; font-size: 12px; color: #8fb3bf; }
+@media (max-width: 980px) { .panel.projects { grid-row: auto; order: -1; } }

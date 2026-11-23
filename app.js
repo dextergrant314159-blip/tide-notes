@@ -88,6 +88,23 @@
   let sessionKey = null, current = null, speakTimer = null;
   const PARTICLES = [[8,12,0,3],[18,78,1.2,2],[26,6,2.4,4],[34,91,.6,2],[48,4,3.1,3],[56,86,1.8,2],[64,22,4,3],[72,70,2.7,2],[80,15,.9,3],[12,48,3.6,2],[88,54,1.5,4],[40,62,2.1,2]];
   const label = (s) => ({ online: 'Online', paused: 'Paused', blocked: 'Blocked', standby: 'Standby', offline: 'Offline' })[s] || 'Idle';
+  // Projects: percent is an estimate (clamped 0-100); state says whether work is moving or blocked on someone.
+  const STATES = { processing: 'Processing', waiting: 'Waiting', done: 'Done' };
+  const pct = (v) => Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+  const projState = (p) => (STATES[p.state] ? p.state : 'processing');
+  function projectCard(p) {
+    const state = projState(p), v = pct(p.percent);
+    const line = state === 'waiting'
+      ? h('div', { className: 'proj-status waiting' }, h('b', {}, 'Waiting on: '), p.waiting_on || p.status || 'not stated')
+      : h('div', { className: 'proj-status ' + state }, h('b', {}, state === 'done' ? 'Done: ' : 'Now: '), p.status || '');
+    return h('article', { className: 'proj ' + state },
+      h('div', { className: 'proj-head' }, h('span', { className: 'proj-name' }, p.name), h('span', { className: 'chip ' + state }, STATES[state])),
+      h('div', { className: 'bar', role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100', 'aria-valuenow': String(v), 'aria-label': p.name + ' estimated progress' },
+        h('div', { className: 'fill ' + state, style: { width: v + '%' } })),
+      h('div', { className: 'proj-meta' }, h('span', {}, `~${v}% est.`), h('span', {}, [p.owner, p.updated].filter(Boolean).join(' · '))),
+      line,
+      state === 'waiting' && p.status && p.waiting_on ? h('div', { className: 'proj-note' }, p.status) : null);
+  }
   const lsGet = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } };
 
   function render(data, env) {
@@ -115,17 +132,27 @@
     const flagged = bots.filter((b) => b.status === 'paused' || b.status === 'blocked').length;
     const flagLine = () => flagged === 0 ? 'None are paused or blocked.' : `${flagged} ${flagged === 1 ? 'is' : 'are'} paused or blocked.`;
     const n = (k, one, many) => `${k} ${k === 1 ? one : many}`;
+    const projects = Array.isArray(data.projects) ? data.projects.filter((p) => p && p.name) : [];
+    const projWaiting = () => projects.filter((p) => projState(p) === 'waiting');
+    const projLine = () => {
+      if (!projects.length) return '';
+      const w = projWaiting();
+      return ` ${n(projects.length, 'project', 'projects')} tracked, ${w.length} waiting${w.length ? ': ' + w.map((p) => `${p.name} on ${p.waiting_on || 'something'}`).join('; ') : ''}.`;
+    };
     const computerLine = () => data.computer ? (data.computer.spoken || '') : '';
 
     const actions = {
       brief() {
         const o = open(); const first = o[0] ? ` The one to do first is ${o[0].title.replace(/\.$/, '').toLowerCase()}.` : ' Nothing is waiting on you.';
-        speak(`Good morning${name ? ', ' + name : ''}. ${n(bots.length, 'bot', 'bots')} on the roster. ${flagLine()} ${computerLine()} ${n(o.length, 'decision is', 'decisions are')} waiting.${first}`);
+        speak(`Good morning${name ? ', ' + name : ''}. ${n(bots.length, 'bot', 'bots')} on the roster. ${flagLine()} ${computerLine()} ${n(o.length, 'decision is', 'decisions are')} waiting.${projLine()}${first}`);
       },
       status() { speak(`Status report. ${flagLine()} ${data.statusLine || ''} ${n(open().length, 'decision is', 'decisions are')} in the queue. Data as of ${data.updated}.`); },
       waiting() {
         const o = open();
         speak(o.length ? `${n(o.length, 'item needs', 'items need')} you. ${o.map((d) => d.title).join('. Next: ')}. Approve and Later only change this screen.` : 'Nothing is marked waiting on you.');
+      },
+      projects() {
+        speak(projects.length ? projects.map((p) => `${p.name}, about ${pct(p.percent)} percent, ${projState(p) === 'waiting' ? 'waiting on ' + (p.waiting_on || p.status || 'something') : (p.status || STATES[projState(p)])}`).join('. ') + '.' : 'No projects listed yet.');
       },
       focus() { st.focus = !st.focus; hud.classList.toggle('is-focus', st.focus); speak(st.focus ? 'Focus mode on. Panels dimmed, motion calmed.' : 'Focus mode off.'); draw(); },
     };
@@ -160,6 +187,9 @@
           h('section', { className: 'center' },
             h('div', { className: 'core-wrap' }, h('div', { className: 'ring r3' }), h('div', { className: 'ring r2' }), h('div', { className: 'ring r1' }), h('div', { className: 'wave' }), h('div', { className: 'core' }, h('span', {}, data.brand || ''))),
             transcript),
+          h('section', { className: 'panel projects' },
+            h('h2', {}, 'PROJECTS ', h('span', { className: 'count' }, projects.length ? `${projWaiting().length} waiting · ${projects.length}` : '0')),
+            projects.length ? projects.map(projectCard) : h('div', { className: 'empty' }, 'No projects listed yet.')),
           h('section', { className: 'panel right' },
             h('h2', {}, 'WAITING ON YOU ', h('span', { className: 'count' }, o.length)),
             o.length ? null : h('div', { className: 'empty' }, 'No open items.'),
@@ -175,6 +205,7 @@
             h('button', { type: 'button', className: 'cmd', onclick: actions.brief }, 'Morning brief'),
             h('button', { type: 'button', className: 'cmd', onclick: actions.status }, 'Status'),
             h('button', { type: 'button', className: 'cmd', onclick: actions.waiting }, "What's waiting"),
+            h('button', { type: 'button', className: 'cmd', onclick: actions.projects }, 'Projects'),
             h('button', { type: 'button', className: 'cmd', onclick: actions.focus }, st.focus ? 'Exit focus' : 'Focus mode'))),
         h('footer', { className: 'footer' }, 'Approve and Later only change this screen. Nothing is sent. Real decisions still happen in chat.'));
     }
