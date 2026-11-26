@@ -12,6 +12,7 @@
   const root = document.getElementById('root');
   // Live countdown on the usage meters; cleared on lock or redraw.
   let usageTick = 0;
+  let usageResumeTimer = 0;
   const enc = new TextEncoder(),
     dec = new TextDecoder();
   const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -374,44 +375,146 @@
       clearInterval(usageTick);
       usageTick = 0;
     }
+    if (usageResumeTimer) {
+      clearTimeout(usageResumeTimer);
+      usageResumeTimer = 0;
+    }
   }
 
   function startUsageCountdown() {
     stopUsageCountdown();
     const nodes = root.querySelectorAll('[data-resets-at]');
-    if (!nodes.length) {
+    const hasSession = root.querySelector('[data-session-resets-at]');
+    if (!nodes.length && !hasSession) {
       return;
     }
     const tick = () => {
       const now = Date.now();
       nodes.forEach((el) => {
+        if (el.getAttribute('data-session-reset') === '1') {
+          const raw = el.getAttribute('data-resets-at');
+          const ms = Date.parse(raw || '');
+          el.textContent = Number.isFinite(ms) && ms > now ? formatTimeLeft(raw, now) : '';
+          return;
+        }
         const rolled = rollForwardReset(el.getAttribute('data-resets-at'), now);
         el.textContent = rolled ? formatTimeLeft(rolled, now) : 'reset time unknown';
       });
+      root.querySelectorAll('.usage-pause[data-session-resets-at]').forEach((el) => {
+        const ms = Date.parse(el.getAttribute('data-session-resets-at') || '');
+        el.hidden = !(Number.isFinite(ms) && ms > now);
+      });
+      let sessionPaused = false;
+      root.querySelectorAll('[data-session-row]').forEach((el) => {
+        const ms = Date.parse(el.getAttribute('data-session-resets-at') || '');
+        const percent = Number(el.getAttribute('data-session-percent'));
+        const resumed =
+          Number.isFinite(percent) && percent >= 100 && Number.isFinite(ms) && ms <= now;
+        const paused =
+          Number.isFinite(percent) && percent >= 100 && Number.isFinite(ms) && ms > now;
+        sessionPaused = sessionPaused || paused;
+        el.classList.toggle('is-resumed', resumed);
+        el.classList.toggle('is-paused', paused);
+      });
+      root.querySelectorAll('[data-claude-weekly]').forEach((el) => {
+        el.classList.toggle('is-paused', sessionPaused);
+      });
     };
     tick();
-    usageTick = setInterval(tick, 30000);
+    usageTick = setInterval(tick, 15000);
+    const sessionReset = root.querySelector('[data-session-resets-at]');
+    if (sessionReset) {
+      const ms = Date.parse(sessionReset.getAttribute('data-session-resets-at') || '');
+      if (Number.isFinite(ms) && ms > Date.now()) {
+        usageResumeTimer = setTimeout(tick, ms - Date.now() + 50);
+      }
+    }
   }
 
-  function usageMeta(slot) {
+  function formatSessionResumeTime(date, now) {
+    const ms = date instanceof Date ? date.getTime() : Date.parse(date);
+    if (!Number.isFinite(ms)) {
+      return '';
+    }
+    const time =
+      new Date(ms).toLocaleString('en-US', {
+        timeZone: 'America/Los_Angeles',
+        hour: 'numeric',
+        minute: '2-digit',
+      }) + ' PT';
+    const dayOf = (value) =>
+      new Date(value).toLocaleString('en-US', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      });
+    return dayOf(ms) === dayOf(now) ? time : formatResetAt(ms);
+  }
+
+  function claudeSessionIsPaused(slot, now) {
+    const t = now instanceof Date ? now.getTime() : now;
+    if (!slot || !Number.isFinite(slot.percent) || slot.percent < 100) {
+      return false;
+    }
+    const reset = Date.parse(slot.resetsAt || '');
+    return Number.isFinite(reset) && reset > t;
+  }
+
+  function sessionResetPassed(slot, now) {
+    const t = now instanceof Date ? now.getTime() : now;
+    if (!slot || !Number.isFinite(slot.percent) || slot.percent < 100) {
+      return false;
+    }
+    const reset = Date.parse(slot.resetsAt || '');
+    return Number.isFinite(reset) && reset <= t;
+  }
+
+  function usageMeta(slot, options) {
     const parts = [];
     const updated = formatUsageAt(slot.at);
     if (updated) {
       parts.push('updated ' + updated);
     }
     const now = Date.now();
-    const rolled = slot.resetsAt ? rollForwardReset(slot.resetsAt, now) : '';
-    if (rolled) {
-      parts.push('resets ' + formatResetAt(rolled));
-      parts.push(
-        h(
-          'span',
-          { className: 'usage-left', 'data-resets-at': rolled },
-          formatTimeLeft(rolled, now),
-        ),
-      );
+    const weekly = !options || options.weekly !== false;
+    if (weekly) {
+      const rolled = slot.resetsAt ? rollForwardReset(slot.resetsAt, now) : '';
+      if (rolled) {
+        parts.push('resets ' + formatResetAt(rolled));
+        parts.push(
+          h(
+            'span',
+            { className: 'usage-left', 'data-resets-at': rolled },
+            formatTimeLeft(rolled, now),
+          ),
+        );
+      } else {
+        parts.push('reset time unknown');
+      }
     } else {
-      parts.push('reset time unknown');
+      const reset = Date.parse(slot.resetsAt || '');
+      if (Number.isFinite(reset)) {
+        const when = formatSessionResumeTime(reset, now);
+        if (reset > now) {
+          parts.push('resets ' + when);
+          parts.push(
+            h(
+              'span',
+              {
+                className: 'usage-left',
+                'data-resets-at': slot.resetsAt,
+                'data-session-reset': '1',
+              },
+              formatTimeLeft(slot.resetsAt, now),
+            ),
+          );
+        } else {
+          parts.push('resumed ' + when);
+        }
+      } else {
+        parts.push('reset time unknown');
+      }
     }
     const nodes = [];
     parts.forEach((part, i) => {
@@ -423,16 +526,33 @@
     return nodes;
   }
 
-  function usageMeter(label, slot, stopAt) {
+  function usageLabel(name, kind, showDot) {
+    return h(
+      'span',
+      { className: 'usage-label' },
+      showDot ? h('span', { className: 'usage-pause-dot', 'aria-hidden': 'true' }) : null,
+      h('span', { className: 'usage-name' }, name),
+      h('span', { className: 'usage-kind' }, kind),
+    );
+  }
+
+  function usageMeter(name, kind, slot, stopAt, options) {
     if (!slot || typeof slot !== 'object') {
       return null;
     }
+    const weekly = !options || options.weekly !== false;
     const v = pct(slot.percent);
-    const meta = usageMeta(slot);
+    const meta = usageMeta(slot, { weekly: weekly });
+    const paused = options && options.paused;
+    const markWeekly = options && options.claudeWeekly;
+    const attrs = { className: 'usage-row' + (paused ? ' is-paused' : '') };
+    if (markWeekly) {
+      attrs['data-claude-weekly'] = '1';
+    }
     return h(
       'div',
-      { className: 'usage-row' },
-      h('span', { className: 'usage-label' }, label),
+      attrs,
+      usageLabel(name, kind, markWeekly),
       h(
         'div',
         {
@@ -442,7 +562,9 @@
           'aria-valuemax': '100',
           'aria-valuenow': String(v),
           'aria-label':
-            label +
+            name +
+            ' ' +
+            kind +
             ' usage ' +
             v +
             ' percent. ' +
@@ -471,14 +593,87 @@
     );
   }
 
+  function sessionRow(slot, now) {
+    if (!slot || typeof slot !== 'object' || !Number.isFinite(slot.percent)) {
+      return null;
+    }
+    const resumed = sessionResetPassed(slot, now);
+    const paused = claudeSessionIsPaused(slot, now);
+    const resetAttr = slot.resetsAt || '';
+    const liveMeta = usageMeta(slot, { weekly: false });
+    const resumeTime = slot.resetsAt ? formatSessionResumeTime(slot.resetsAt, now) : '';
+    const v = pct(slot.percent);
+    return h(
+      'div',
+      {
+        className:
+          'usage-row usage-session' + (resumed ? ' is-resumed' : '') + (paused ? ' is-paused' : ''),
+        'data-session-row': '1',
+        'data-session-resets-at': resetAttr,
+        'data-session-percent': String(slot.percent),
+      },
+      usageLabel('Claude', 'session', slot.percent >= 100),
+      h(
+        'div',
+        {
+          className: 'usage-bar usage-live-only',
+          role: 'progressbar',
+          'aria-valuemin': '0',
+          'aria-valuemax': '100',
+          'aria-valuenow': String(v),
+          'aria-label': 'Claude session usage ' + v + ' percent.',
+        },
+        h('div', {
+          className: 'fill usage-fill' + (paused ? ' is-capped' : ''),
+          'aria-hidden': 'true',
+          style: { width: v + '%' },
+        }),
+      ),
+      h('span', { className: 'usage-pct usage-live-only' }, v + '%'),
+      liveMeta.length ? h('span', { className: 'usage-at usage-live-only' }, ...liveMeta) : null,
+      h(
+        'span',
+        { className: 'usage-at usage-resumed-only' },
+        resumeTime
+          ? 'resumed ' + resumeTime + ' · waiting for a new reading'
+          : 'waiting for a new reading',
+      ),
+    );
+  }
+
+  function pauseBanner(slot, now) {
+    if (!slot || !slot.resetsAt || !Number.isFinite(slot.percent) || slot.percent < 100) {
+      return null;
+    }
+    const resume = formatSessionResumeTime(slot.resetsAt, now);
+    const paused = claudeSessionIsPaused(slot, now);
+    return h(
+      'p',
+      {
+        className: 'usage-pause',
+        'data-session-resets-at': slot.resetsAt,
+        hidden: !paused,
+      },
+      h('span', { className: 'usage-pause-dot', 'aria-hidden': 'true' }),
+      h('span', {}, 'Claude paused: session limit, resumes ' + resume),
+    );
+  }
+
   function usageBlock(usage) {
     if (!usage || typeof usage !== 'object') {
       return null;
     }
+    const now = Date.now();
     const stopAt = Number.isFinite(usage.stopAt) ? usage.stopAt : 80;
-    const grok = usageMeter('Grok Bot', usage.grokBot, stopAt);
-    const claude = usageMeter('Claude', usage.claude, null);
-    if (!grok && !claude) {
+    const paused = claudeSessionIsPaused(usage.claudeSession, now);
+    const grok = usageMeter('Grok Bot', 'weekly', usage.grokBot, stopAt);
+    const claude = usageMeter('Claude', 'weekly', usage.claude, null, {
+      paused: paused,
+      claudeWeekly: true,
+    });
+    const session = sessionRow(usage.claudeSession, now);
+    const banner = pauseBanner(usage.claudeSession, now);
+    if (!grok && !claude && !session) {
       return null;
     }
     return h(
@@ -487,10 +682,14 @@
       h('h2', {}, 'USAGE'),
       grok,
       claude,
+      banner,
+      session,
       h(
         'p',
         { className: 'usage-note' },
-        'Dev work stops around ' + pct(stopAt) + '% Grok Bot usage. Claude can go to 100%.',
+        'Dev work stops around ' +
+          pct(stopAt) +
+          '% Grok Bot weekly usage. Claude weekly can go to 100%. A red marker appears when the 5-hour Claude session limit is full.',
       ),
     );
   }
@@ -602,22 +801,44 @@
       status() {
         const u = data.usage || {};
         const stopAt = Number.isFinite(u.stopAt) ? u.stopAt : 80;
-        const usageSpeak = (name, slot) => {
+        const usageSpeak = (name, slot, options) => {
           if (!slot || !Number.isFinite(slot.percent)) {
             return '';
           }
-          const rolled = slot.resetsAt ? rollForwardReset(slot.resetsAt, Date.now()) : '';
-          const reset = rolled
-            ? ` Reset ${formatResetAt(rolled)}, ${formatTimeLeft(rolled, Date.now())}.`
-            : ' Reset time unknown.';
+          const weekly = !options || options.weekly !== false;
+          const now = Date.now();
+          let reset = ' Reset time unknown.';
+          if (weekly) {
+            const rolled = slot.resetsAt ? rollForwardReset(slot.resetsAt, now) : '';
+            if (rolled) {
+              reset = ` Reset ${formatResetAt(rolled)}, ${formatTimeLeft(rolled, now)}.`;
+            }
+          } else if (slot.resetsAt && Number.isFinite(Date.parse(slot.resetsAt))) {
+            const when = formatSessionResumeTime(slot.resetsAt, now);
+            reset =
+              Date.parse(slot.resetsAt) > now
+                ? ` Resets ${when}, ${formatTimeLeft(slot.resetsAt, now)}.`
+                : ` Resumed ${when}.`;
+          }
           return ` ${name} usage ${pct(slot.percent)} percent.${reset}`;
         };
-        const grok = usageSpeak('Grok Bot', u.grokBot);
-        const claude = usageSpeak('Claude', u.claude);
+        const pauseLine = claudeSessionIsPaused(u.claudeSession, Date.now())
+          ? ' ' +
+            'Claude paused: session limit, resumes ' +
+            formatSessionResumeTime(u.claudeSession.resetsAt, Date.now()) +
+            '.'
+          : '';
+        const grok = usageSpeak('Grok Bot weekly', u.grokBot);
+        const claude = usageSpeak('Claude weekly', u.claude);
+        const session = sessionResetPassed(u.claudeSession, Date.now())
+          ? ' Claude session has resumed and is waiting for a new reading.'
+          : usageSpeak('Claude session', u.claudeSession, { weekly: false });
         const stop =
-          grok || claude ? ` Development stops around ${pct(stopAt)} percent Grok Bot usage.` : '';
+          grok || claude
+            ? ` Development stops around ${pct(stopAt)} percent Grok Bot weekly usage.`
+            : '';
         speak(
-          `Status report. ${flagLine()} ${data.statusLine || ''}${grok}${claude}${stop} ${n(open().length, 'decision is', 'decisions are')} in the queue. Data as of ${data.updated}.`,
+          `Status report. ${flagLine()} ${data.statusLine || ''}${pauseLine}${grok}${claude}${session}${stop} ${n(open().length, 'decision is', 'decisions are')} in the queue. Data as of ${data.updated}.`,
         );
       },
       waiting() {
