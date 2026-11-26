@@ -273,15 +273,13 @@
     if (!Number.isFinite(ms)) {
       return '';
     }
-    return (
-      new Date(ms).toLocaleString('en-US', {
-        timeZone: 'America/Los_Angeles',
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      }) + ' PT'
-    );
+    return new Date(ms).toLocaleString('en-US', {
+      timeZone: 'America/Los_Angeles',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   }
 
   function formatResetAt(at) {
@@ -289,16 +287,14 @@
     if (!Number.isFinite(ms)) {
       return '';
     }
-    return (
-      new Date(ms).toLocaleString('en-US', {
-        timeZone: 'America/Los_Angeles',
-        weekday: 'short',
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
-      }) + ' PT'
-    );
+    return new Date(ms).toLocaleString('en-US', {
+      timeZone: 'America/Los_Angeles',
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
   }
 
   // Keep the same Pacific clock time when adding weeks, including across DST.
@@ -370,6 +366,29 @@
     return days + 'd ' + hours + 'h ' + minutes + 'm left';
   }
 
+  function formatTimeLeftCompact(until, now) {
+    const end = Date.parse(until || '');
+    if (!Number.isFinite(end)) {
+      return '';
+    }
+    const start = now instanceof Date ? now.getTime() : now;
+    let ms = end - start;
+    if (ms < 0) {
+      ms = 0;
+    }
+    const totalMin = Math.floor(ms / 60000);
+    const days = Math.floor(totalMin / (60 * 24));
+    const hours = Math.floor((totalMin % (60 * 24)) / 60);
+    const minutes = totalMin % 60;
+    if (days > 0) {
+      return days + 'd ' + hours + 'h';
+    }
+    if (hours > 0) {
+      return hours + 'h ' + minutes + 'm';
+    }
+    return minutes + 'm';
+  }
+
   function stopUsageCountdown() {
     if (usageTick) {
       clearInterval(usageTick);
@@ -391,20 +410,15 @@
     const tick = () => {
       const now = Date.now();
       nodes.forEach((el) => {
+        const raw = el.getAttribute('data-resets-at');
         if (el.getAttribute('data-session-reset') === '1') {
-          const raw = el.getAttribute('data-resets-at');
           const ms = Date.parse(raw || '');
-          el.textContent = Number.isFinite(ms) && ms > now ? formatTimeLeft(raw, now) : '';
+          el.textContent = Number.isFinite(ms) && ms > now ? formatTimeLeftCompact(raw, now) : '';
           return;
         }
-        const rolled = rollForwardReset(el.getAttribute('data-resets-at'), now);
-        el.textContent = rolled ? formatTimeLeft(rolled, now) : 'reset time unknown';
+        const rolled = rollForwardReset(raw, now);
+        el.textContent = rolled ? formatTimeLeftCompact(rolled, now) : '';
       });
-      root.querySelectorAll('.usage-pause[data-session-resets-at]').forEach((el) => {
-        const ms = Date.parse(el.getAttribute('data-session-resets-at') || '');
-        el.hidden = !(Number.isFinite(ms) && ms > now);
-      });
-      let sessionPaused = false;
       root.querySelectorAll('[data-session-row]').forEach((el) => {
         const ms = Date.parse(el.getAttribute('data-session-resets-at') || '');
         const percent = Number(el.getAttribute('data-session-percent'));
@@ -412,12 +426,8 @@
           Number.isFinite(percent) && percent >= 100 && Number.isFinite(ms) && ms <= now;
         const paused =
           Number.isFinite(percent) && percent >= 100 && Number.isFinite(ms) && ms > now;
-        sessionPaused = sessionPaused || paused;
         el.classList.toggle('is-resumed', resumed);
         el.classList.toggle('is-paused', paused);
-      });
-      root.querySelectorAll('[data-claude-weekly]').forEach((el) => {
-        el.classList.toggle('is-paused', sessionPaused);
       });
     };
     tick();
@@ -436,12 +446,11 @@
     if (!Number.isFinite(ms)) {
       return '';
     }
-    const time =
-      new Date(ms).toLocaleString('en-US', {
-        timeZone: 'America/Los_Angeles',
-        hour: 'numeric',
-        minute: '2-digit',
-      }) + ' PT';
+    const time = new Date(ms).toLocaleString('en-US', {
+      timeZone: 'America/Los_Angeles',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
     const dayOf = (value) =>
       new Date(value).toLocaleString('en-US', {
         timeZone: 'America/Los_Angeles',
@@ -470,89 +479,67 @@
     return Number.isFinite(reset) && reset <= t;
   }
 
-  function usageMeta(slot, options) {
-    const parts = [];
-    const updated = formatUsageAt(slot.at);
-    if (updated) {
-      parts.push('updated ' + updated);
-    }
-    const now = Date.now();
+  function usageResetLine(slot, options) {
     const weekly = !options || options.weekly !== false;
+    const now = Date.now();
     if (weekly) {
       const rolled = slot.resetsAt ? rollForwardReset(slot.resetsAt, now) : '';
-      if (rolled) {
-        parts.push('resets ' + formatResetAt(rolled));
-        parts.push(
-          h(
-            'span',
-            { className: 'usage-left', 'data-resets-at': rolled },
-            formatTimeLeft(rolled, now),
-          ),
-        );
-      } else {
-        parts.push('reset time unknown');
-      }
-    } else {
-      const reset = Date.parse(slot.resetsAt || '');
-      if (Number.isFinite(reset)) {
-        const when = formatSessionResumeTime(reset, now);
-        if (reset > now) {
-          parts.push('resets ' + when);
-          parts.push(
-            h(
-              'span',
-              {
-                className: 'usage-left',
-                'data-resets-at': slot.resetsAt,
-                'data-session-reset': '1',
-              },
-              formatTimeLeft(slot.resetsAt, now),
-            ),
-          );
-        } else {
-          parts.push('resumed ' + when);
-        }
-      } else {
-        parts.push('reset time unknown');
-      }
+      return rolled ? 'resets ' + formatResetAt(rolled) : 'reset time unknown';
     }
-    const nodes = [];
-    parts.forEach((part, i) => {
-      if (i > 0) {
-        nodes.push(' · ');
-      }
-      nodes.push(part);
-    });
-    return nodes;
+    const reset = Date.parse(slot.resetsAt || '');
+    if (!Number.isFinite(reset)) {
+      return 'reset time unknown';
+    }
+    const when = formatSessionResumeTime(reset, now);
+    return reset > now ? 'resets ' + when : 'resumed ' + when;
   }
 
-  function usageLabel(name, kind, showDot) {
+  function usageLabel(name, kind, resetAt, options) {
+    const weekly = !options || options.weekly !== false;
+    const now = Date.now();
+    let left = '';
+    let attr = '';
+    let sessionReset = false;
+    if (weekly) {
+      const rolled = resetAt ? rollForwardReset(resetAt, now) : '';
+      if (rolled) {
+        left = formatTimeLeftCompact(rolled, now);
+        attr = rolled;
+      }
+    } else if (resetAt) {
+      const ms = Date.parse(resetAt);
+      if (Number.isFinite(ms) && ms > now) {
+        left = formatTimeLeftCompact(resetAt, now);
+        attr = resetAt;
+        sessionReset = true;
+      }
+    }
+    const leftAttrs = { className: 'usage-left' };
+    if (attr) {
+      leftAttrs['data-resets-at'] = attr;
+      if (sessionReset) {
+        leftAttrs['data-session-reset'] = '1';
+      }
+    }
     return h(
       'span',
       { className: 'usage-label' },
-      showDot ? h('span', { className: 'usage-pause-dot', 'aria-hidden': 'true' }) : null,
       h('span', { className: 'usage-name' }, name),
       h('span', { className: 'usage-kind' }, kind),
+      left ? h('span', leftAttrs, left) : null,
     );
   }
 
-  function usageMeter(name, kind, slot, stopAt, options) {
+  function usageMeter(name, kind, slot, stopAt) {
     if (!slot || typeof slot !== 'object') {
       return null;
     }
-    const weekly = !options || options.weekly !== false;
     const v = pct(slot.percent);
-    const meta = usageMeta(slot, { weekly: weekly });
-    const paused = options && options.paused;
-    const markWeekly = options && options.claudeWeekly;
-    const attrs = { className: 'usage-row' + (paused ? ' is-paused' : '') };
-    if (markWeekly) {
-      attrs['data-claude-weekly'] = '1';
-    }
+    const resetLine = usageResetLine(slot, { weekly: true });
     return h(
       'div',
-      attrs,
-      usageLabel(name, kind, markWeekly),
+      { className: 'usage-row' },
+      usageLabel(name, kind, slot.resetsAt, { weekly: true }),
       h(
         'div',
         {
@@ -561,18 +548,7 @@
           'aria-valuemin': '0',
           'aria-valuemax': '100',
           'aria-valuenow': String(v),
-          'aria-label':
-            name +
-            ' ' +
-            kind +
-            ' usage ' +
-            v +
-            ' percent. ' +
-            meta
-              .map((n) => (typeof n === 'string' ? n : n.textContent || ''))
-              .join('')
-              .replace(/\s+/g, ' ')
-              .trim(),
+          'aria-label': name + ' ' + kind + ' usage ' + v + ' percent. ' + resetLine,
         },
         h('div', {
           className: 'fill usage-fill',
@@ -589,7 +565,7 @@
           : null,
       ),
       h('span', { className: 'usage-pct' }, v + '%'),
-      meta.length ? h('span', { className: 'usage-at' }, ...meta) : null,
+      h('span', { className: 'usage-at' }, resetLine),
     );
   }
 
@@ -600,8 +576,7 @@
     const resumed = sessionResetPassed(slot, now);
     const paused = claudeSessionIsPaused(slot, now);
     const resetAttr = slot.resetsAt || '';
-    const liveMeta = usageMeta(slot, { weekly: false });
-    const resumeTime = slot.resetsAt ? formatSessionResumeTime(slot.resetsAt, now) : '';
+    const resetLine = usageResetLine(slot, { weekly: false });
     const v = pct(slot.percent);
     return h(
       'div',
@@ -612,7 +587,7 @@
         'data-session-resets-at': resetAttr,
         'data-session-percent': String(slot.percent),
       },
-      usageLabel('Claude', 'session', slot.percent >= 100),
+      usageLabel('Claude', 'session', resetAttr, { weekly: false }),
       h(
         'div',
         {
@@ -621,7 +596,7 @@
           'aria-valuemin': '0',
           'aria-valuemax': '100',
           'aria-valuenow': String(v),
-          'aria-label': 'Claude session usage ' + v + ' percent.',
+          'aria-label': 'Claude session usage ' + v + ' percent. ' + resetLine,
         },
         h('div', {
           className: 'fill usage-fill' + (paused ? ' is-capped' : ''),
@@ -630,32 +605,14 @@
         }),
       ),
       h('span', { className: 'usage-pct usage-live-only' }, v + '%'),
-      liveMeta.length ? h('span', { className: 'usage-at usage-live-only' }, ...liveMeta) : null,
+      h('span', { className: 'usage-at usage-live-only' }, resetLine),
       h(
         'span',
         { className: 'usage-at usage-resumed-only' },
-        resumeTime
-          ? 'resumed ' + resumeTime + ' · waiting for a new reading'
-          : 'waiting for a new reading',
+        resetLine === 'reset time unknown'
+          ? 'waiting for a new reading'
+          : resetLine + ' · waiting for a new reading',
       ),
-    );
-  }
-
-  function pauseBanner(slot, now) {
-    if (!slot || !slot.resetsAt || !Number.isFinite(slot.percent) || slot.percent < 100) {
-      return null;
-    }
-    const resume = formatSessionResumeTime(slot.resetsAt, now);
-    const paused = claudeSessionIsPaused(slot, now);
-    return h(
-      'p',
-      {
-        className: 'usage-pause',
-        'data-session-resets-at': slot.resetsAt,
-        hidden: !paused,
-      },
-      h('span', { className: 'usage-pause-dot', 'aria-hidden': 'true' }),
-      h('span', {}, 'Claude paused: session limit, resumes ' + resume),
     );
   }
 
@@ -665,14 +622,9 @@
     }
     const now = Date.now();
     const stopAt = Number.isFinite(usage.stopAt) ? usage.stopAt : 80;
-    const paused = claudeSessionIsPaused(usage.claudeSession, now);
     const grok = usageMeter('Grok Bot', 'weekly', usage.grokBot, stopAt);
-    const claude = usageMeter('Claude', 'weekly', usage.claude, null, {
-      paused: paused,
-      claudeWeekly: true,
-    });
+    const claude = usageMeter('Claude', 'weekly', usage.claude, null);
     const session = sessionRow(usage.claudeSession, now);
-    const banner = pauseBanner(usage.claudeSession, now);
     if (!grok && !claude && !session) {
       return null;
     }
@@ -682,14 +634,13 @@
       h('h2', {}, 'USAGE'),
       grok,
       claude,
-      banner,
       session,
       h(
         'p',
         { className: 'usage-note' },
         'Dev work stops around ' +
           pct(stopAt) +
-          '% Grok Bot weekly usage. Claude weekly can go to 100%. A red marker appears when the 5-hour Claude session limit is full.',
+          '% Grok Bot weekly usage. Claude weekly can go to 100%.',
       ),
     );
   }
@@ -822,12 +773,6 @@
           }
           return ` ${name} usage ${pct(slot.percent)} percent.${reset}`;
         };
-        const pauseLine = claudeSessionIsPaused(u.claudeSession, Date.now())
-          ? ' ' +
-            'Claude paused: session limit, resumes ' +
-            formatSessionResumeTime(u.claudeSession.resetsAt, Date.now()) +
-            '.'
-          : '';
         const grok = usageSpeak('Grok Bot weekly', u.grokBot);
         const claude = usageSpeak('Claude weekly', u.claude);
         const session = sessionResetPassed(u.claudeSession, Date.now())
@@ -838,7 +783,7 @@
             ? ` Development stops around ${pct(stopAt)} percent Grok Bot weekly usage.`
             : '';
         speak(
-          `Status report. ${flagLine()} ${data.statusLine || ''}${pauseLine}${grok}${claude}${session}${stop} ${n(open().length, 'decision is', 'decisions are')} in the queue. Data as of ${data.updated}.`,
+          `Status report. ${flagLine()} ${data.statusLine || ''}${grok}${claude}${session}${stop} ${n(open().length, 'decision is', 'decisions are')} in the queue. Data as of ${data.updated}.`,
         );
       },
       waiting() {

@@ -2,7 +2,7 @@
 /** Offline cache for the Tide Notes shell. data.enc.json is fetched
  *  network-first and stored separately, still encrypted.
  */
-const V = 'shell-v6';
+const V = 'shell-v7';
 const SHELL = [
   './',
   'index.html',
