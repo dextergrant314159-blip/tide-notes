@@ -403,8 +403,8 @@
   function startUsageCountdown() {
     stopUsageCountdown();
     const nodes = root.querySelectorAll('[data-resets-at]');
-    const hasSession = root.querySelector('[data-session-resets-at]');
-    if (!nodes.length && !hasSession) {
+    const rows = root.querySelectorAll('[data-usage-row]');
+    if (!nodes.length && !rows.length) {
       return;
     }
     const tick = () => {
@@ -419,25 +419,19 @@
         const rolled = rollForwardReset(raw, now);
         el.textContent = rolled ? formatTimeLeftCompact(rolled, now) : '';
       });
-      root.querySelectorAll('[data-session-row]').forEach((el) => {
-        const ms = Date.parse(el.getAttribute('data-session-resets-at') || '');
-        const percent = Number(el.getAttribute('data-session-percent'));
-        const resumed =
-          Number.isFinite(percent) && percent >= 100 && Number.isFinite(ms) && ms <= now;
-        const paused =
-          Number.isFinite(percent) && percent >= 100 && Number.isFinite(ms) && ms > now;
-        el.classList.toggle('is-resumed', resumed);
-        el.classList.toggle('is-paused', paused);
-      });
+      root.querySelectorAll('[data-usage-row]').forEach((el) => applyUsageTone(el, now));
     };
     tick();
     usageTick = setInterval(tick, 15000);
-    const sessionReset = root.querySelector('[data-session-resets-at]');
-    if (sessionReset) {
-      const ms = Date.parse(sessionReset.getAttribute('data-session-resets-at') || '');
-      if (Number.isFinite(ms) && ms > Date.now()) {
-        usageResumeTimer = setTimeout(tick, ms - Date.now() + 50);
+    let nextCap = Infinity;
+    root.querySelectorAll('[data-usage-row]').forEach((el) => {
+      const ms = Date.parse(el.getAttribute('data-usage-resets-at') || '');
+      if (Number.isFinite(ms) && ms > Date.now() && ms < nextCap) {
+        nextCap = ms;
       }
+    });
+    if (Number.isFinite(nextCap) && nextCap < Infinity) {
+      usageResumeTimer = setTimeout(tick, nextCap - Date.now() + 50);
     }
   }
 
@@ -461,13 +455,24 @@
     return dayOf(ms) === dayOf(now) ? time : formatResetAt(ms);
   }
 
-  function claudeSessionIsPaused(slot, now) {
-    const t = now instanceof Date ? now.getTime() : now;
-    if (!slot || !Number.isFinite(slot.percent) || slot.percent < 100) {
-      return false;
+  function usageMeterTone(slot, now, stopAt) {
+    if (!slot || typeof slot !== 'object' || !Number.isFinite(slot.percent)) {
+      return 'ok';
     }
-    const reset = Date.parse(slot.resetsAt || '');
-    return Number.isFinite(reset) && reset > t;
+    const t = now instanceof Date ? now.getTime() : now;
+    const threshold = Number.isFinite(stopAt) ? stopAt : 80;
+    const reset = slot.resetsAt ? Date.parse(slot.resetsAt) : NaN;
+    if (slot.percent >= 100 && Number.isFinite(reset) && reset > t) {
+      return 'capped';
+    }
+    if (slot.percent > threshold) {
+      return 'warn';
+    }
+    return 'ok';
+  }
+
+  function claudeSessionIsPaused(slot, now) {
+    return usageMeterTone(slot, now) === 'capped';
   }
 
   function sessionResetPassed(slot, now) {
@@ -477,6 +482,35 @@
     }
     const reset = Date.parse(slot.resetsAt || '');
     return Number.isFinite(reset) && reset <= t;
+  }
+
+  function usageRowClass(base, tone, resumed) {
+    return (
+      base +
+      (tone === 'capped' ? ' is-capped' : '') +
+      (tone === 'warn' ? ' is-warn' : '') +
+      (resumed ? ' is-resumed' : '')
+    );
+  }
+
+  function applyUsageTone(el, now) {
+    const percent = Number(el.getAttribute('data-usage-percent'));
+    const resetAt = el.getAttribute('data-usage-resets-at') || '';
+    const stopAt = Number(el.getAttribute('data-usage-stop-at'));
+    const isSession = el.hasAttribute('data-session-row');
+    const slot = { percent: percent, resetsAt: resetAt };
+    const resumed = isSession && sessionResetPassed(slot, now);
+    const tone = resumed ? 'ok' : usageMeterTone(slot, now, stopAt);
+    el.classList.toggle('is-capped', tone === 'capped');
+    el.classList.toggle('is-warn', tone === 'warn');
+    if (isSession) {
+      el.classList.toggle('is-resumed', resumed);
+    }
+    const fill = el.querySelector('.usage-fill');
+    if (fill) {
+      fill.classList.toggle('is-capped', tone === 'capped');
+      fill.classList.toggle('is-warn', tone === 'warn');
+    }
   }
 
   function usageResetLine(slot, options) {
@@ -530,16 +564,28 @@
     );
   }
 
-  function usageMeter(name, kind, slot, stopAt) {
+  function usageMeter(name, kind, slot, stopAt, options) {
     if (!slot || typeof slot !== 'object') {
       return null;
     }
+    const weekly = !options || options.weekly !== false;
+    const now = options && options.now != null ? options.now : Date.now();
+    const resumed = !weekly && sessionResetPassed(slot, now);
+    const tone = resumed ? 'ok' : usageMeterTone(slot, now, stopAt);
     const v = pct(slot.percent);
-    const resetLine = usageResetLine(slot, { weekly: true });
+    const resetLine = usageResetLine(slot, { weekly: weekly });
+    const session = !weekly;
     return h(
       'div',
-      { className: 'usage-row' },
-      usageLabel(name, kind, slot.resetsAt, { weekly: true }),
+      {
+        className: usageRowClass('usage-row' + (session ? ' usage-session' : ''), tone, resumed),
+        'data-usage-row': '1',
+        'data-usage-percent': String(slot.percent),
+        'data-usage-resets-at': slot.resetsAt || '',
+        'data-usage-stop-at': Number.isFinite(stopAt) ? String(stopAt) : '80',
+        'data-session-row': session ? '1' : undefined,
+      },
+      usageLabel(name, kind, slot.resetsAt, { weekly: weekly }),
       h(
         'div',
         {
@@ -551,11 +597,14 @@
           'aria-label': name + ' ' + kind + ' usage ' + v + ' percent. ' + resetLine,
         },
         h('div', {
-          className: 'fill usage-fill',
+          className:
+            'fill usage-fill' +
+            (tone === 'capped' ? ' is-capped' : '') +
+            (tone === 'warn' ? ' is-warn' : ''),
           'aria-hidden': 'true',
           style: { width: v + '%' },
         }),
-        stopAt != null
+        Number.isFinite(stopAt)
           ? h('span', {
               className: 'usage-stop',
               'aria-hidden': 'true',
@@ -569,21 +618,25 @@
     );
   }
 
-  function sessionRow(slot, now) {
+  function sessionRow(slot, now, stopAt) {
     if (!slot || typeof slot !== 'object' || !Number.isFinite(slot.percent)) {
       return null;
     }
     const resumed = sessionResetPassed(slot, now);
-    const paused = claudeSessionIsPaused(slot, now);
+    const tone = resumed ? 'ok' : usageMeterTone(slot, now, stopAt);
     const resetAttr = slot.resetsAt || '';
     const resetLine = usageResetLine(slot, { weekly: false });
     const v = pct(slot.percent);
+    const threshold = Number.isFinite(stopAt) ? stopAt : 80;
     return h(
       'div',
       {
-        className:
-          'usage-row usage-session' + (resumed ? ' is-resumed' : '') + (paused ? ' is-paused' : ''),
+        className: usageRowClass('usage-row usage-session', tone, resumed),
+        'data-usage-row': '1',
         'data-session-row': '1',
+        'data-usage-percent': String(slot.percent),
+        'data-usage-resets-at': resetAttr,
+        'data-usage-stop-at': String(threshold),
         'data-session-resets-at': resetAttr,
         'data-session-percent': String(slot.percent),
       },
@@ -599,9 +652,18 @@
           'aria-label': 'Claude session usage ' + v + ' percent. ' + resetLine,
         },
         h('div', {
-          className: 'fill usage-fill' + (paused ? ' is-capped' : ''),
+          className:
+            'fill usage-fill' +
+            (tone === 'capped' ? ' is-capped' : '') +
+            (tone === 'warn' ? ' is-warn' : ''),
           'aria-hidden': 'true',
           style: { width: v + '%' },
+        }),
+        h('span', {
+          className: 'usage-stop',
+          'aria-hidden': 'true',
+          style: { left: pct(threshold) + '%' },
+          title: 'Stop at ' + pct(threshold) + '%',
         }),
       ),
       h('span', { className: 'usage-pct usage-live-only' }, v + '%'),
@@ -623,8 +685,8 @@
     const now = Date.now();
     const stopAt = Number.isFinite(usage.stopAt) ? usage.stopAt : 80;
     const grok = usageMeter('Grok Bot', 'weekly', usage.grokBot, stopAt);
-    const claude = usageMeter('Claude', 'weekly', usage.claude, null);
-    const session = sessionRow(usage.claudeSession, now);
+    const claude = usageMeter('Claude', 'weekly', usage.claude, stopAt);
+    const session = sessionRow(usage.claudeSession, now, stopAt);
     if (!grok && !claude && !session) {
       return null;
     }
@@ -638,7 +700,9 @@
       h(
         'p',
         { className: 'usage-note' },
-        'Dev work stops around ' +
+        'A meter turns amber above ' +
+          pct(stopAt) +
+          '% and red at a 100% cap until its reset. Dev work stops around ' +
           pct(stopAt) +
           '% Grok Bot weekly usage. Claude weekly can go to 100%.',
       ),
@@ -938,24 +1002,6 @@
             ),
             h(
               'section',
-              { className: 'panel projects' },
-              h(
-                'h2',
-                {},
-                'PROJECTS ',
-                h(
-                  'span',
-                  { className: 'count' },
-                  projects.length ? `${projWaiting().length} waiting · ${projects.length}` : '0',
-                ),
-              ),
-              projects.length
-                ? projects.map((p) => projectCard(p))
-                : h('div', { className: 'empty' }, 'No projects listed yet.'),
-              archiveSection(archived),
-            ),
-            h(
-              'section',
               { className: 'panel right' },
               h('h2', {}, 'WAITING ON YOU ', h('span', { className: 'count' }, o.length)),
               o.length ? null : h('div', { className: 'empty' }, 'No open items.'),
@@ -1001,6 +1047,24 @@
                     ),
                   )
                 : null,
+            ),
+            h(
+              'section',
+              { className: 'panel projects' },
+              h(
+                'h2',
+                {},
+                'PROJECTS ',
+                h(
+                  'span',
+                  { className: 'count' },
+                  projects.length ? `${projWaiting().length} waiting · ${projects.length}` : '0',
+                ),
+              ),
+              projects.length
+                ? projects.map((p) => projectCard(p))
+                : h('div', { className: 'empty' }, 'No projects listed yet.'),
+              archiveSection(archived),
             ),
           ),
           h(

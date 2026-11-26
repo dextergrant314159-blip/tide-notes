@@ -588,8 +588,11 @@ body {
   .panel.right {
     order: 0;
   }
-  .panel.left {
+  .panel.projects {
     order: 1;
+  }
+  .panel.left {
+    order: 2;
   }
 }
 
@@ -718,7 +721,7 @@ body {
 @media (max-width: 980px) {
   .panel.projects {
     grid-row: auto;
-    order: -1;
+    order: 1;
   }
 }
 .is-focus .fill {
@@ -790,16 +793,37 @@ body {
   text-transform: uppercase;
   color: #9ad7e6;
 }
+.usage-fill.is-warn {
+  background: linear-gradient(90deg, #e8a32a, #ffc861);
+  box-shadow: 0 0 10px rgba(255, 200, 97, 0.55);
+}
 .usage-fill.is-capped {
   background: linear-gradient(90deg, #ff4d4d, #ff8a8a);
   box-shadow: 0 0 10px rgba(255, 77, 77, 0.5);
 }
-.usage-session.is-paused {
+.usage-row.is-warn,
+.usage-row.is-capped {
   margin: 4px -8px;
   padding: 6px 8px;
   border-radius: 8px;
+}
+.usage-row.is-warn {
+  background: rgba(255, 200, 97, 0.14);
+  border: 1px solid rgba(255, 200, 97, 0.7);
+}
+.usage-row.is-capped {
   background: rgba(255, 77, 77, 0.12);
   border: 1px solid rgba(255, 77, 77, 0.45);
+}
+.usage-row.is-warn .usage-stop {
+  background: #06101c;
+  box-shadow:
+    0 0 0 1px #ffc861,
+    0 0 6px rgba(255, 200, 97, 0.7);
+}
+.usage-row.is-capped .usage-stop {
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
 }
 .usage-session.is-resumed .usage-live-only {
   display: none;
