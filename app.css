@@ -763,7 +763,7 @@ body {
 }
 .usage-row {
   display: grid;
-  grid-template-columns: 88px minmax(80px, 1fr) 48px auto;
+  grid-template-columns: 88px minmax(80px, 1fr) 48px;
   gap: 8px 10px;
   align-items: center;
   margin: 6px 0;
@@ -804,9 +804,15 @@ body {
   color: #e8fbff;
 }
 .usage-at {
+  grid-column: 2 / -1;
+  margin-top: -2px;
   color: #9ad7e6;
   font-size: 11px;
-  white-space: nowrap;
+  line-height: 1.35;
+  white-space: normal;
+}
+.usage-left {
+  font-variant-numeric: tabular-nums;
 }
 .usage-note {
   margin: 8px 0 0;

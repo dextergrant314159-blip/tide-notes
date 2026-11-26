@@ -10,6 +10,8 @@
     STORE = 'k',
     KEY_ID = 'main';
   const root = document.getElementById('root');
+  // Live countdown on the usage meters; cleared on lock or redraw.
+  let usageTick = 0;
   const enc = new TextEncoder(),
     dec = new TextDecoder();
   const b64 = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
@@ -281,12 +283,152 @@
     );
   }
 
+  function formatResetAt(at) {
+    const ms = Date.parse(at || '');
+    if (!Number.isFinite(ms)) {
+      return '';
+    }
+    return (
+      new Date(ms).toLocaleString('en-US', {
+        timeZone: 'America/Los_Angeles',
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }) + ' PT'
+    );
+  }
+
+  // Keep the same Pacific clock time when adding weeks, including across DST.
+  function rollForwardReset(resetsAt, now) {
+    let ms = Date.parse(resetsAt || '');
+    if (!Number.isFinite(ms)) {
+      return '';
+    }
+    const tz = 'America/Los_Angeles';
+    const partsOf = (date) => {
+      const map = {};
+      new Intl.DateTimeFormat('en-US', {
+        timeZone: tz,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+      })
+        .formatToParts(date)
+        .forEach((p) => {
+          map[p.type] = p.value;
+        });
+      return map;
+    };
+    const civilDate = (year, month, day, hour, minute, second) => {
+      const want = year + '-' + month + '-' + day + 'T' + hour + ':' + minute + ':' + second;
+      for (const offset of ['-08:00', '-07:00']) {
+        const date = new Date(want + offset);
+        const p = partsOf(date);
+        if (
+          p.year + '-' + p.month + '-' + p.day + 'T' + p.hour + ':' + p.minute + ':' + p.second ===
+          want
+        ) {
+          return date.getTime();
+        }
+      }
+      return NaN;
+    };
+    let guard = 0;
+    while (ms <= now && guard < 60) {
+      const p = partsOf(new Date(ms));
+      const noon = Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day) + 7, 12, 0, 0);
+      const n = partsOf(new Date(noon));
+      ms = civilDate(n.year, n.month, n.day, p.hour, p.minute, p.second);
+      if (!Number.isFinite(ms)) {
+        return '';
+      }
+      guard += 1;
+    }
+    return ms > now ? new Date(ms).toISOString() : '';
+  }
+
+  function formatTimeLeft(until, now) {
+    const end = Date.parse(until || '');
+    if (!Number.isFinite(end)) {
+      return '';
+    }
+    let ms = end - now;
+    if (ms < 0) {
+      ms = 0;
+    }
+    const totalMin = Math.floor(ms / 60000);
+    const days = Math.floor(totalMin / (60 * 24));
+    const hours = Math.floor((totalMin % (60 * 24)) / 60);
+    const minutes = totalMin % 60;
+    return days + 'd ' + hours + 'h ' + minutes + 'm left';
+  }
+
+  function stopUsageCountdown() {
+    if (usageTick) {
+      clearInterval(usageTick);
+      usageTick = 0;
+    }
+  }
+
+  function startUsageCountdown() {
+    stopUsageCountdown();
+    const nodes = root.querySelectorAll('[data-resets-at]');
+    if (!nodes.length) {
+      return;
+    }
+    const tick = () => {
+      const now = Date.now();
+      nodes.forEach((el) => {
+        const rolled = rollForwardReset(el.getAttribute('data-resets-at'), now);
+        el.textContent = rolled ? formatTimeLeft(rolled, now) : 'reset time unknown';
+      });
+    };
+    tick();
+    usageTick = setInterval(tick, 30000);
+  }
+
+  function usageMeta(slot) {
+    const parts = [];
+    const updated = formatUsageAt(slot.at);
+    if (updated) {
+      parts.push('updated ' + updated);
+    }
+    const now = Date.now();
+    const rolled = slot.resetsAt ? rollForwardReset(slot.resetsAt, now) : '';
+    if (rolled) {
+      parts.push('resets ' + formatResetAt(rolled));
+      parts.push(
+        h(
+          'span',
+          { className: 'usage-left', 'data-resets-at': rolled },
+          formatTimeLeft(rolled, now),
+        ),
+      );
+    } else {
+      parts.push('reset time unknown');
+    }
+    const nodes = [];
+    parts.forEach((part, i) => {
+      if (i > 0) {
+        nodes.push(' · ');
+      }
+      nodes.push(part);
+    });
+    return nodes;
+  }
+
   function usageMeter(label, slot, stopAt) {
     if (!slot || typeof slot !== 'object') {
       return null;
     }
     const v = pct(slot.percent);
-    const when = formatUsageAt(slot.at);
+    const meta = usageMeta(slot);
     return h(
       'div',
       { className: 'usage-row' },
@@ -299,7 +441,16 @@
           'aria-valuemin': '0',
           'aria-valuemax': '100',
           'aria-valuenow': String(v),
-          'aria-label': label + ' usage ' + v + ' percent',
+          'aria-label':
+            label +
+            ' usage ' +
+            v +
+            ' percent. ' +
+            meta
+              .map((n) => (typeof n === 'string' ? n : n.textContent || ''))
+              .join('')
+              .replace(/\s+/g, ' ')
+              .trim(),
         },
         h('div', {
           className: 'fill usage-fill',
@@ -316,7 +467,7 @@
           : null,
       ),
       h('span', { className: 'usage-pct' }, v + '%'),
-      when ? h('span', { className: 'usage-at' }, when) : null,
+      meta.length ? h('span', { className: 'usage-at' }, ...meta) : null,
     );
   }
 
@@ -451,14 +602,18 @@
       status() {
         const u = data.usage || {};
         const stopAt = Number.isFinite(u.stopAt) ? u.stopAt : 80;
-        const grok =
-          u.grokBot && Number.isFinite(u.grokBot.percent)
-            ? ` Grok Bot usage ${pct(u.grokBot.percent)} percent.`
-            : '';
-        const claude =
-          u.claude && Number.isFinite(u.claude.percent)
-            ? ` Claude usage ${pct(u.claude.percent)} percent.`
-            : '';
+        const usageSpeak = (name, slot) => {
+          if (!slot || !Number.isFinite(slot.percent)) {
+            return '';
+          }
+          const rolled = slot.resetsAt ? rollForwardReset(slot.resetsAt, Date.now()) : '';
+          const reset = rolled
+            ? ` Reset ${formatResetAt(rolled)}, ${formatTimeLeft(rolled, Date.now())}.`
+            : ' Reset time unknown.';
+          return ` ${name} usage ${pct(slot.percent)} percent.${reset}`;
+        };
+        const grok = usageSpeak('Grok Bot', u.grokBot);
+        const claude = usageSpeak('Claude', u.claude);
         const stop =
           grok || claude ? ` Development stops around ${pct(stopAt)} percent Grok Bot usage.` : '';
         speak(
@@ -718,6 +873,7 @@
           ),
         ].filter(Boolean),
       );
+      startUsageCountdown();
     }
     draw();
     hud.replaceChildren(
@@ -747,6 +903,7 @@
   }
 
   async function lock() {
+    stopUsageCountdown();
     sessionKey = null;
     current = null;
     await dropKey();
